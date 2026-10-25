@@ -23,6 +23,7 @@
 #include "devices/mpr121.hpp"
 #include "devices/usb.hpp"
 #include "devices/ads1115.hpp"
+#include "devices/oled_display.hpp"
 #include "devices/debug.hpp"
 #include "devices/midiserial.hpp"
 #include "devices/ws2812.hpp"
@@ -323,6 +324,10 @@ std::shared_ptr<Device> DeviceFactory::create_device(
         
     case proto_Device_ads1115_tag:
         device = std::make_shared<ADS1115Device>(proto_device.device.ads1115, device_id);
+        break;
+
+    case proto_Device_oledDisplay_tag:
+        device = std::make_shared<OLEDDisplay>(proto_device.device.oledDisplay, device_id);
         break;
         
     case proto_Device_debug_tag:

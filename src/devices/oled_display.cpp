@@ -1,11 +1,11 @@
-#include "oled_display.hpp"
+#include "devices/oled_display.hpp"
 #include <cstring>
+#include <cstdio>
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
+#include "hardware/gpio.h"
 
-namespace santroller {
-
-// Basic 5x7 ASCII font bitmap table for characters ' ' (32) through '~' (126)
+// Basic 5x7 ASCII font bitmap table for characters ' ' (32) through 'z' (122).
 static const uint8_t FONT_5X7[][5] = {
     {0x00, 0x00, 0x00, 0x00, 0x00}, // ' ' (32)
     {0x00, 0x00, 0x5F, 0x00, 0x00}, // '!'
@@ -100,15 +100,38 @@ static const uint8_t FONT_5X7[][5] = {
     {0x44, 0x64, 0x54, 0x4C, 0x44}  // 'z'
 };
 
-bool OLEDDisplay::init(const OLEDConfig& config) {
-    m_config = config;
+OLEDDisplay::OLEDDisplay(proto_OLEDDisplayDevice device, uint16_t id)
+    : Device(id),
+      m_config{
+          device.i2c.block == 0 ? i2c0 : i2c1,
+          static_cast<uint8_t>(device.i2c.sda),
+          static_cast<uint8_t>(device.i2c.scl),
+          static_cast<uint8_t>(device.has_address ? device.address : 0x3C),
+          static_cast<uint32_t>(device.i2c.clock)},
+      m_device(device) {}
 
-    // Initialize Pico Hardware I2C peripheral
-    i2c_init(m_config.i2c_inst, m_config.baudrate);
-    gpio_set_function(m_config.sda_pin, GPIO_FUNC_I2C);
-    gpio_set_function(m_config.scl_pin, GPIO_FUNC_I2C);
-    gpio_pull_up(m_config.sda_pin);
-    gpio_pull_up(m_config.scl_pin);
+bool OLEDDisplay::init() {
+    if ((m_device.i2c.block != 0 && m_device.i2c.block != 1) ||
+        m_device.i2c.sda < 0 || m_device.i2c.sda > UINT8_MAX ||
+        m_device.i2c.scl < 0 || m_device.i2c.scl > UINT8_MAX ||
+        (m_device.has_address && m_device.address > 0x7F) ||
+        m_device.i2c.clock <= 0 ||
+        m_config.sda_pin >= NUM_BANK0_GPIOS ||
+        m_config.scl_pin >= NUM_BANK0_GPIOS ||
+        m_config.sda_pin == m_config.scl_pin) {
+        return false;
+    }
+
+    if (!m_i2c_initialized) {
+        if (i2c_init(m_config.i2c_inst, m_config.baudrate) == 0) {
+            return false;
+        }
+        gpio_set_function(m_config.sda_pin, GPIO_FUNC_I2C);
+        gpio_set_function(m_config.scl_pin, GPIO_FUNC_I2C);
+        gpio_pull_up(m_config.sda_pin);
+        gpio_pull_up(m_config.scl_pin);
+        m_i2c_initialized = true;
+    }
 
     // SSD1306 Initialization sequence for 128x32 OLED panel
     static const uint8_t init_cmds[] = {
@@ -130,16 +153,59 @@ bool OLEDDisplay::init(const OLEDConfig& config) {
         0xAF        // Display ON
     };
 
-    send_command_list(init_cmds, sizeof(init_cmds));
-    clear();
-    flush();
+    if (!send_command_list(init_cmds, sizeof(init_cmds))) {
+        m_initialized = false;
+        return false;
+    }
 
-    return true;
+    m_initialized = true;
+    clear();
+    return flush();
 }
 
-void OLEDDisplay::update() {
+void OLEDDisplay::begin() {
+    m_next_init_attempt_ms = to_ms_since_boot(get_absolute_time()) + 1000;
+    m_i2c_error_reported = !init();
+    if (m_i2c_error_reported) {
+        printf("OLED display initialization failed on I2C bus %d\r\n", m_device.i2c.block);
+    }
+}
+
+void OLEDDisplay::end(bool full) {
+    (void)full;
+    if (m_initialized && !send_command(0xAE)) {
+        printf("OLED display shutdown command failed\r\n");
+    }
+    m_initialized = false;
+}
+
+void OLEDDisplay::update(bool full_poll, bool send_events) {
+    (void)full_poll;
+    (void)send_events;
+
+    if (!m_initialized) {
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        if (static_cast<int32_t>(now - m_next_init_attempt_ms) >= 0) {
+            m_next_init_attempt_ms = now + 1000;
+            if (init()) {
+                m_i2c_error_reported = false;
+            } else if (!m_i2c_error_reported) {
+                printf("OLED display initialization retry failed on I2C bus %d\r\n", m_device.i2c.block);
+                m_i2c_error_reported = true;
+            }
+        }
+        return;
+    }
+
     if (m_dirty) {
-        flush();
+        if (!flush()) {
+            if (!m_i2c_error_reported) {
+                printf("OLED display frame transfer failed on I2C bus %d\r\n", m_device.i2c.block);
+                m_i2c_error_reported = true;
+            }
+        } else {
+            m_i2c_error_reported = false;
+        }
     }
 }
 
@@ -148,17 +214,23 @@ void OLEDDisplay::clear() {
     m_dirty = true;
 }
 
-void OLEDDisplay::flush() {
+bool OLEDDisplay::flush() {
+    if (!m_initialized) {
+        return false;
+    }
+
     // Set page address range (0 to 3) and column address range (0 to 127)
     static const uint8_t set_bounds[] = {
         0x21, 0x00, 0x7F, // Column start: 0, end: 127
         0x22, 0x00, 0x03  // Page start: 0, end: 3
     };
-    send_command_list(set_bounds, sizeof(set_bounds));
+    if (!send_command_list(set_bounds, sizeof(set_bounds)) ||
+        !send_data(m_buffer, sizeof(m_buffer))) {
+        return false;
+    }
 
-    // Send frame buffer bytes
-    send_data(m_buffer, sizeof(m_buffer));
     m_dirty = false;
+    return true;
 }
 
 void OLEDDisplay::draw_pixel(int16_t x, int16_t y, bool color) {
@@ -178,7 +250,7 @@ void OLEDDisplay::draw_pixel(int16_t x, int16_t y, bool color) {
 }
 
 void OLEDDisplay::draw_char(int16_t x, int16_t y, char c, bool color) {
-    if (c < 32 || c > 122) {
+    if (c < 32 || c > 'z') {
         c = '?';
     }
     const uint8_t* char_data = FONT_5X7[c - 32];
@@ -194,6 +266,10 @@ void OLEDDisplay::draw_char(int16_t x, int16_t y, char c, bool color) {
 }
 
 void OLEDDisplay::draw_string(int16_t x, int16_t y, const char* str, bool color) {
+    if (str == nullptr) {
+        return;
+    }
+
     int16_t cursor_x = x;
     while (*str) {
         if (cursor_x + 5 >= WIDTH) {
@@ -229,24 +305,46 @@ void OLEDDisplay::draw_status(const char* status, uint8_t player_num) {
     m_dirty = true;
 }
 
-void OLEDDisplay::send_command(uint8_t cmd) {
+bool OLEDDisplay::using_pin(uint8_t pin) {
+    return pin == m_device.i2c.sda || pin == m_device.i2c.scl;
+}
+
+bool OLEDDisplay::send_command(uint8_t cmd) {
     uint8_t buf[2] = {0x00, cmd}; // 0x00 Co=0, D/C#=0
-    i2c_write_blocking(m_config.i2c_inst, m_config.i2c_address, buf, 2, false);
+    return i2c_write_blocking(m_config.i2c_inst, m_config.i2c_address, buf, sizeof(buf), false) ==
+           static_cast<int>(sizeof(buf));
 }
 
-void OLEDDisplay::send_command_list(const uint8_t* cmds, size_t count) {
+bool OLEDDisplay::send_command_list(const uint8_t* cmds, size_t count) {
     for (size_t i = 0; i < count; ++i) {
-        send_command(cmds[i]);
+        if (!send_command(cmds[i])) {
+            return false;
+        }
     }
+    return true;
 }
 
-void OLEDDisplay::send_data(const uint8_t* data, size_t len) {
-    // Allocation chunk: 1 control byte (0x40) + length
-    uint8_t tx_buf[BUFFER_SIZE + 1];
-    tx_buf[0] = 0x40; // Data byte prefix
-    std::memcpy(&tx_buf[1], data, len);
+bool OLEDDisplay::send_data(const uint8_t* data, size_t len) {
+    if (len > FRAMEBUFFER_SIZE) {
+        return false;
+    }
 
-    i2c_write_blocking(m_config.i2c_inst, m_config.i2c_address, tx_buf, len + 1, false);
+    static constexpr size_t DATA_CHUNK_SIZE = 128;
+    uint8_t tx_buf[DATA_CHUNK_SIZE + 1];
+    size_t offset = 0;
+    while (offset < len) {
+        size_t chunk_size = len - offset;
+        if (chunk_size > DATA_CHUNK_SIZE) {
+            chunk_size = DATA_CHUNK_SIZE;
+        }
+
+        tx_buf[0] = 0x40;
+        std::memcpy(&tx_buf[1], &data[offset], chunk_size);
+        if (i2c_write_blocking(m_config.i2c_inst, m_config.i2c_address, tx_buf, chunk_size + 1, false) !=
+            static_cast<int>(chunk_size + 1)) {
+            return false;
+        }
+        offset += chunk_size;
+    }
+    return true;
 }
-
-} // namespace santroller

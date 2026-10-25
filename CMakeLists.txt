@@ -417,6 +417,7 @@ add_executable(
   src/devices/infinium_fader.cpp
   src/devices/secondary_pico.cpp
   src/devices/ads1115.cpp
+  src/devices/oled_display.cpp
   src/devices/device.cpp
   src/devices/accelerometer.cpp
   src/devices/bhdrum.cpp

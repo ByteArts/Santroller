@@ -1,68 +1,37 @@
-To integrate an **SSD1306 128x32 I2C OLED display** as a custom device in Santroller, you can mirror the pattern used by WS2812 NeoPixels and other peripheral output devices 1, 2\. The implementation spans five core layers across the repository 3, 4:
+# SSD1306 OLED display support
 
-### 1\. Protobuf Configuration Schema (proto/)
+The firmware driver supports a 128x32 SSD1306 display connected over hardware I2C. The
+device is configured through the normal `proto_Device` configuration, initialized and
+updated through the firmware's `Device` lifecycle, and flushed only when its framebuffer
+is dirty.
 
-Santroller uses Protobuf definitions to structure configuration data passed between the firmware and the Santroller Configurator GUI 2\.
+## Firmware configuration
 
-* **Add display settings**: Update or add a message in the .proto files under proto/ (e.g., devices.proto) 2, 3\.  
-* **Define parameters**:  
-* enabled (boolean flag)  
-* i2c\_bus (e.g., i2c0 or i2c1 on RP2040) 1  
-* sda\_pin and scl\_pin (e.g., GP4/GP5) 1, 2  
-* i2c\_address (default 0x3C for SSD1306)  
-* screen\_width (128) and screen\_height (32)
+`proto_OLEDDisplayDevice` in `proto/device.proto` contains:
 
-### 2\. Device Class Abstraction (include/ & src/)
+- A required `I2CDevice` configuration (`block`, `sda`, `scl`, and `clock`).
+- An optional 7-bit I2C address. When omitted, the driver uses `0x3C`.
 
-In Santroller, output peripherals inherit from a base device interface 1, 2\. You will create a dedicated OLEDDisplay class under include/devices/oled\_display.hpp and src/devices/oled\_display.cpp 3\.
+Add the OLED device to the profile's device list to enable it. The display geometry is
+fixed at 128x32; configurable dimensions and an `enabled` flag are intentionally omitted.
+The device's presence in the configuration controls whether it is enabled.
 
-* **Class Structure**:  
-* class OLEDDisplay : public Device {  
-* public:  
-*     bool init(const OledConfig& config);  
-*     void update() override;  
-*     void draw\_status(ConnectionStatus status, uint8\_t player\_number);  
-*     void flush\_framebuffer();  
-* private:  
-*     uint8\_t framebuffer\[128 \* 32 / 8\]; // 512 bytes for 128x32 monochrome display  
-*     i2c\_inst\_t\* i2c\_hardware;  
-*     uint8\_t i2c\_addr;  
-* };
+The protocol schema and firmware factory are implemented here, but the external
+Santroller Configurator UI must also expose the new device type before users can add or
+edit it through that UI.
 
-### 3\. RP2040 Hardware I2C & SSD1306 Initialization
+## Driver and rendering
 
-On the Raspberry Pi Pico, hardware communication utilizes the Pico SDK hardware\_i2c library 1, 2\.
+`OLEDDisplay` implements `Device::begin`, `end`, `update`, and `using_pin`. It initializes
+the SSD1306, writes a 512-byte page-addressed framebuffer, and retains the dirty flag if a
+transfer fails so a later update can retry. Failed initialization is retried at one-second
+intervals, and I2C failures are logged without flooding the main loop.
 
-* **I2C Initialization**:  
-* Call i2c\_init(i2c\_hardware, baudrate) (typically 400kHz fast mode).  
-* Configure GPIO pins with gpio\_set\_function(sda\_pin, GPIO\_FUNC\_I2C) and gpio\_set\_function(scl\_pin, GPIO\_FUNC\_I2C).  
-* Enable internal pull-ups using gpio\_pull\_up().  
-* **SSD1306 Command Sequence**:  
-* Send initialization command stream via i2c\_write\_blocking():  
-* Display OFF (0xAE)  
-* Set multiplex ratio to 31 for 32-line height (0xA8, 0x1F)  
-* Set display offset & start line (0xD3, 0x00, 0x40)  
-* Enable charge pump regulator (0x8D, 0x14)  
-* Set memory addressing mode to horizontal (0x20, 0x00)  
-* Display ON (0xAF)  
-* **Buffer Flush**:  
-* Send control byte 0x40 (data mode) followed by the 512-byte framebuffer array to render text and graphics.
+The drawing API provides pixel, character, string, and status rendering helpers. The
+status helper accepts a status string and player number; it is not yet connected to global
+connection, profile, or player-state notifications. That state/event wiring is a separate
+follow-up. The driver sends the display-off command when its device lifecycle ends; it
+does not deinitialize the hardware I2C controller because that controller may be shared.
 
-### 4\. Event Loop Integration & Status UI
-
-Santroller's central update loop drives reactive output devices based on controller state changes 1, 2\.
-
-* **State Triggers**: Connect the OLED display class to system status notifications 1, 2:  
-* **Connection Status**: Display state strings such as "Connecting...", "USB Connected", or "Console Mode" 1, 2\.  
-* **Player Index**: Render "Player 1" through "Player 4" (or P1–P4 icons) corresponding to the assigned console LED index 1, 2\.  
-* **Profile / Mode**: Display active layout info (e.g., Guitar, Drums, or Gamepad profile).  
-* **Frame Rate Management**: Update text rendering in draw\_status() only when state changes occur, then flush the buffer periodically inside update() to keep I2C bus traffic low.
-
-### 5\. CMake Build System (CMakeLists.txt)
-
-Ensure the new device sources compile for RP2040 target boards 1, 3\.
-
-* Add src/devices/oled\_display.cpp to the main executable source list in CMakeLists.txt 3\.  
-* Link hardware\_i2c from the Pico SDK dependencies 1\.
-
-💡 **Next Step**: Would you like to draft the C++ header and implementation code for the OLEDDisplay class and SSD1306 initialization sequence?  
+The implementation is compiled into the `santroller` target. `hardware_i2c` was already
+linked by the firmware target, so no additional CMake library dependency is needed.
