@@ -17,3 +17,4 @@ build_pico1
 build_pico2
 build_configurator
 build-tests*
+.DS_Store
