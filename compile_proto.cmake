@@ -3,6 +3,7 @@ set(SANTROLLER_PROTO_ROOT ${CMAKE_CURRENT_LIST_DIR})
 
 function(compile_proto)
 	find_package(Python3 REQUIRED COMPONENTS Interpreter)
+	set(SANTROLLER_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}" PARENT_SCOPE)
 
 	set(VENV ${CMAKE_CURRENT_BINARY_DIR}/venv)
 	set(VENV_FILE ${VENV}/environment.txt)
