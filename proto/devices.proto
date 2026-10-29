@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package santroller;
 
-// Configuration for I2C OLED display peripheral (e.g. SSD1306 128x32)
+// Configuration for I2C OLED display peripheral (e.g. SH1106 128x32)
 message OledDisplayConfig {
   bool enabled = 1;              // Enable/disable OLED display
   uint32 i2c_bus = 2;            // I2C controller bus index (0 = i2c0, 1 = i2c1)

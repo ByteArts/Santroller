@@ -133,20 +133,19 @@ bool OLEDDisplay::init() {
         m_i2c_initialized = true;
     }
 
-    // SSD1306 Initialization sequence for 128x32 OLED panel
+    // SH1106 initialization sequence for a 128x32 OLED panel
     static const uint8_t init_cmds[] = {
         0xAE,       // Display OFF
         0xD5, 0x80, // Set Display Clock Divide Ratio / Oscillator Frequency
         0xA8, 0x1F, // Set Multiplex Ratio (32 lines - 1 = 0x1F)
         0xD3, 0x00, // Set Display Offset (0)
         0x40,       // Set Start Line (0)
-        0x8D, 0x14, // Enable Charge Pump
-        0x20, 0x00, // Memory Addressing Mode: Horizontal
+        0xAD, 0x8B, // Enable SH1106 DC-DC converter
         0xA1,       // Segment Re-map (col 127 mapped to SEG0)
         0xC8,       // COM Output Scan Direction (remapped)
         0xDA, 0x02, // COM Pins Hardware Configuration (Sequential)
         0x81, 0x8F, // Set Contrast Control
-        0xD9, 0xF1, // Set Pre-charge Period
+        0xD9, 0x1F, // Set Discharge/Pre-charge Period
         0xDB, 0x40, // Set VCOMH Deselect Level
         0xA4,       // Entire Display ON (Resume to RAM content)
         0xA6,       // Normal Display (not inverted)
@@ -219,14 +218,18 @@ bool OLEDDisplay::flush() {
         return false;
     }
 
-    // Set page address range (0 to 3) and column address range (0 to 127)
-    static const uint8_t set_bounds[] = {
-        0x21, 0x00, 0x7F, // Column start: 0, end: 127
-        0x22, 0x00, 0x03  // Page start: 0, end: 3
-    };
-    if (!send_command_list(set_bounds, sizeof(set_bounds)) ||
-        !send_data(m_buffer, sizeof(m_buffer))) {
-        return false;
+    static constexpr uint8_t COLUMN_OFFSET = 2;
+    for (uint8_t page = 0; page < PAGES; ++page) {
+        const uint8_t column = COLUMN_OFFSET;
+        const uint8_t set_page_and_column[] = {
+            static_cast<uint8_t>(0xB0 | page),
+            static_cast<uint8_t>(0x00 | (column & 0x0F)),
+            static_cast<uint8_t>(0x10 | (column >> 4))
+        };
+        if (!send_command_list(set_page_and_column, sizeof(set_page_and_column)) ||
+            !send_data(&m_buffer[page * WIDTH], WIDTH)) {
+            return false;
+        }
     }
 
     m_dirty = false;

@@ -77,7 +77,7 @@ message ADS1115Device {
 }
 message OLEDDisplayDevice {
   required I2CDevice i2c = 1;
-  // Defaults to the common SSD1306 address when unset
+  // Defaults to the common SH1106 address when unset
   optional uint32 address = 2;
 }
 

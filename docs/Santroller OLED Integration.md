@@ -1,6 +1,6 @@
-# SSD1306 OLED display support
+# SH1106 OLED display support
 
-The firmware driver supports a 128x32 SSD1306 display connected over hardware I2C. The
+The firmware driver supports a 128x32 SH1106 display connected over hardware I2C. The
 device is configured through the normal `proto_Device` configuration, initialized and
 updated through the firmware's `Device` lifecycle, and flushed only when its framebuffer
 is dirty.
@@ -23,9 +23,11 @@ edit it through that UI.
 ## Driver and rendering
 
 `OLEDDisplay` implements `Device::begin`, `end`, `update`, and `using_pin`. It initializes
-the SSD1306, writes a 512-byte page-addressed framebuffer, and retains the dirty flag if a
-transfer fails so a later update can retry. Failed initialization is retried at one-second
-intervals, and I2C failures are logged without flooding the main loop.
+the SH1106 and writes a 512-byte page-addressed framebuffer using the controller's page and
+column commands. The driver applies the two-column offset used by 128-pixel-wide SH1106
+panels, and retains the dirty flag if a transfer fails so a later update can retry. Failed
+initialization is retried at one-second intervals, and I2C failures are logged without
+flooding the main loop.
 
 The drawing API provides pixel, character, string, and status rendering helpers. The
 status helper accepts a status string and player number; it is not yet connected to global

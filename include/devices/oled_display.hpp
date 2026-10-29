@@ -7,18 +7,18 @@
 #include "hardware/i2c.h"
 
 /**
- * @brief Configuration parameters for the SSD1306 OLED display.
+ * @brief Configuration parameters for the SH1106 OLED display.
  */
 struct OLEDConfig {
     i2c_inst_t* i2c_inst = i2c0;  ///< Hardware I2C instance (i2c0 or i2c1)
-    uint8_t sda_pin = 4;           ///< GPIO pin for SDA
-    uint8_t scl_pin = 5;           ///< GPIO pin for SCL
-    uint8_t i2c_address = 0x3C;    ///< Standard SSD1306 I2C address (0x3C or 0x3D)
+    uint8_t sda_pin = 0;           ///< GPIO pin for SDA
+    uint8_t scl_pin = 1;           ///< GPIO pin for SCL
+    uint8_t i2c_address = 0x3C;    ///< Standard SH1106 I2C address (0x3C or 0x3D)
     uint32_t baudrate = 400000;    ///< I2C clock speed (400 kHz Fast Mode)
 };
 
 /**
- * @brief Device driver for a 128x32 I2C SSD1306 OLED display.
+ * @brief Device driver for a 128x32 I2C SH1106 OLED display.
  */
 class OLEDDisplay : public Device {
 public:
